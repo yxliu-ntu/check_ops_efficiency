@@ -1,0 +1,170 @@
+import torch
+import torch.nn as nn
+import torch.utils.benchmark as benchmark
+import numpy as np
+
+from scipy.sparse import random as sparse_random
+from scipy import sparse
+
+# Module definitions (same as before)
+class SparseDenseMatMul(nn.Module):
+    def __init__(self, matrix_A):
+        super(SparseDenseMatMul, self).__init__()
+        self.matrix_A = nn.Parameter(matrix_A)
+
+    def forward(self, matrix_B):
+        return torch.sparse.mm(matrix_B, self.matrix_A)
+
+class EmbeddingAggregation(nn.Module):
+    def __init__(self, matrix_A):
+        super(EmbeddingAggregation, self).__init__()
+        self.num_embeddings, self.embedding_dim = matrix_A.shape
+        self.embedding = nn.Embedding(self.num_embeddings, self.embedding_dim, sparse=True)
+        self.embedding.weight = nn.Parameter(matrix_A)
+
+    def forward(self, matrix_B):
+        non_zero_indices = matrix_B._indices()
+        values = matrix_B._values()
+        selected_embeddings = self.embedding(non_zero_indices[1])
+        output = torch.zeros(matrix_B.shape[0], self.embedding_dim, device=matrix_B.device)
+        output.index_add_(0, non_zero_indices[0], selected_embeddings * values.unsqueeze(1))
+        return output
+
+# Function to generate a sparse matrix (same as before)
+def generate_sparse_matrix(m, D, k, device, sparsity=0.99):
+    # Generate a sparse matrix using scipy
+    sparse_matrix_scipy = sparse_random(m, D, density=(1-sparsity), format='coo', dtype=np.float32)
+    print("Memory occupied by B: %f GB"%(sparse_matrix_scipy.nnz*32/8./1024/1024/1024))
+    print("Memory occupied by nonzero embeddings: %f GB"%(sparse_matrix_scipy.nnz*k*32/8./1024/1024/1024))
+
+    # Convert scipy sparse matrix to PyTorch sparse tensor
+    values = torch.FloatTensor(sparse_matrix_scipy.data)
+    indices = torch.LongTensor(np.vstack((sparse_matrix_scipy.row, sparse_matrix_scipy.col)))
+
+    return torch.sparse_coo_tensor(indices, values, torch.Size(sparse_matrix_scipy.shape), device=device)
+
+# Function to perform the experiment with exception handling
+def compare_modules(m_values, D, k):
+    results = []
+
+    # Check if GPU is available and set device
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Running on device: {device}")
+
+    # Initialize matrix A
+    matrix_A = torch.rand(D, k, device=device)
+    print("Memory occupied by A: %f GB"%(D*k*32/8./1024/1024/1024))
+
+    # Initialize modules
+    module1 = SparseDenseMatMul(matrix_A).to(device)
+    module2 = EmbeddingAggregation(matrix_A).to(device)
+
+    for m in m_values:
+        print("\nTiming by m=%d"%m)
+        # Generate sparse matrix B
+        matrix_B = generate_sparse_matrix(m, D, k, device)
+
+        target = torch.ones(m, k, device=device)  # Target matrix
+        print("Memory occupied by target: %f GB"%(m*k*32/8./1024/1024/1024))
+
+        outputs_equivalent = False
+
+#        # Forward and backward for module 1
+#        timer1 = benchmark.Timer(
+#            stmt='loss1.backward(retain_graph=True)',
+#            setup='''import torch
+#import torch.nn as nn
+#loss1 = nn.MSELoss()(module1(matrix_B), target[:m])''',
+#            globals={'module1': module1, 'matrix_B': matrix_B, 'target': target, 'm': m},
+#            num_threads=torch.get_num_threads(),
+#        )
+#        result1 = timer1.blocked_autorange()
+#
+#        # Check output equivalence with module 2
+#        with torch.no_grad():
+#            output1 = module1(matrix_B)
+#
+#        module1_success = True
+
+        try:
+            # Forward and backward for module 1
+            timer1 = benchmark.Timer(
+                stmt='loss1.backward(retain_graph=True)',
+                setup='''import torch
+import torch.nn as nn
+loss1 = nn.MSELoss()(module1(matrix_B), target[:m])''',
+                globals={'module1': module1, 'matrix_B': matrix_B, 'target': target, 'm': m},
+                num_threads=torch.get_num_threads(),
+            )
+            result1 = timer1.blocked_autorange()
+
+            # Check output equivalence with module 2
+            with torch.no_grad():
+                output1 = module1(matrix_B)
+
+            module1_success = True
+        except RuntimeError as e:
+            print(f"Module 1 failed at m = {m} with error: {e}")
+            module1_success = False
+            result1 = None
+
+        try:
+            # Forward and backward for module 2
+            timer2 = benchmark.Timer(
+                stmt='loss2.backward(retain_graph=True)',
+                setup='''import torch
+import torch.nn as nn
+loss2 = nn.MSELoss()(module2(matrix_B), target[:m])''',
+                globals={'module2': module2, 'matrix_B': matrix_B, 'target': target, 'm': m},
+                num_threads=torch.get_num_threads(),
+            )
+            result2 = timer2.blocked_autorange()
+
+            # Check output equivalence with module 1
+            with torch.no_grad():
+                output2 = module2(matrix_B)
+                if module1_success:
+                    outputs_equivalent = torch.allclose(output1, output2)
+
+            module2_success = True
+        except RuntimeError as e:
+            print(f"Module 2 failed at m = {m} with error: {e}")
+            module2_success = False
+            result2 = None
+
+        # Store results
+        results.append((m, result1, result2, outputs_equivalent))
+
+        # Stop experiment if both modules failed
+        if not module1_success and not module2_success:
+            break
+
+    return results
+
+# Constants
+k = 64
+D = int(1e6)
+
+# Range of m values (logarithmic steps)
+start_point = 1
+end_point = 4
+m_values = np.logspace(start_point, end_point, num=end_point-start_point+1, base=10).astype(int)
+print(m_values)
+
+# Run the comparison
+comparison_results = compare_modules(m_values, D, k)
+
+# Print results
+for m, result1, result2, equivalent in comparison_results:
+    print(f"m = {m}:")
+    if result1 is not None:
+        print(f"  Module 1 - Time: {result1.mean}")#, Memory: {result1.mem_usage}")
+    else:
+        print("  Module 1 - Failed")
+
+    if result2 is not None:
+        print(f"  Module 2 - Time: {result2.mean}")#, Memory: {result2.mem_usage}")
+    else:
+        print("  Module 2 - Failed")
+    print(f"  Outputs Equivalent: {equivalent}\n")
+

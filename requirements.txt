@@ -1,0 +1,11 @@
+wheel
+numpy
+scipy
+ipython
+tqdm
+PyYAML
+pandas
+scikit-learn
+Cython
+py-spy
+torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118

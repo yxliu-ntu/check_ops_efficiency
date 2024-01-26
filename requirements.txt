@@ -8,4 +8,6 @@ pandas
 scikit-learn
 Cython
 py-spy
+docopt
 torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+tensorflow[and-cuda]

@@ -59,44 +59,31 @@ def compare_modules(m_values, D, k):
     module1 = SparseDenseMatMul(matrix_A).to(device)
     module2 = EmbeddingAggregation(matrix_A).to(device)
 
+    # Loss function
+    loss_fn = nn.MSELoss()
+
     for m in m_values:
         print("\nTiming by m=%d"%m)
         # Generate sparse matrix B
         matrix_B = generate_sparse_matrix(m, D, k, device)
 
         target = torch.ones(m, k, device=device)  # Target matrix
+        output1 = torch.ones(m, k, device=device)  # Target matrix
+        output2 = torch.ones(m, k, device=device)  # Target matrix
         print("Memory occupied by target: %f GB"%(m*k*32/8./1024/1024/1024))
 
         outputs_equivalent = False
 
-#        # Forward and backward for module 1
-#        timer1 = benchmark.Timer(
-#            stmt='loss1.backward(retain_graph=True)',
-#            setup='''import torch
-#import torch.nn as nn
-#loss1 = nn.MSELoss()(module1(matrix_B), target[:m])''',
-#            globals={'module1': module1, 'matrix_B': matrix_B, 'target': target, 'm': m},
-#            num_threads=torch.get_num_threads(),
-#        )
-#        result1 = timer1.blocked_autorange()
-#
-#        # Check output equivalence with module 2
-#        with torch.no_grad():
-#            output1 = module1(matrix_B)
-#
-#        module1_success = True
-
         try:
             # Forward and backward for module 1
             timer1 = benchmark.Timer(
-                stmt='loss1.backward(retain_graph=True)',
-                setup='''import torch
-import torch.nn as nn
-loss1 = nn.MSELoss()(module1(matrix_B), target[:m])''',
-                globals={'module1': module1, 'matrix_B': matrix_B, 'target': target, 'm': m},
-                num_threads=torch.get_num_threads(),
+                    #stmt='module1(matrix_B)',
+                stmt='loss_fn(module1(matrix_B), target).backward()',
+                setup='''import torch.nn as nn''',
+                globals={'module1': module1, 'matrix_B': matrix_B, 'target': target, 'loss_fn': loss_fn},
+                #num_threads=torch.get_num_threads(),
             )
-            result1 = timer1.blocked_autorange()
+            result1 = timer1.blocked_autorange(min_run_time=60)
 
             # Check output equivalence with module 2
             with torch.no_grad():
@@ -107,18 +94,19 @@ loss1 = nn.MSELoss()(module1(matrix_B), target[:m])''',
             print(f"Module 1 failed at m = {m} with error: {e}")
             module1_success = False
             result1 = None
+        del timer1
+        torch.cuda.empty_cache()
 
         try:
             # Forward and backward for module 2
             timer2 = benchmark.Timer(
-                stmt='loss2.backward(retain_graph=True)',
-                setup='''import torch
-import torch.nn as nn
-loss2 = nn.MSELoss()(module2(matrix_B), target[:m])''',
-                globals={'module2': module2, 'matrix_B': matrix_B, 'target': target, 'm': m},
-                num_threads=torch.get_num_threads(),
+                    #stmt='module2(matrix_B)',
+                stmt='loss_fn(module2(matrix_B), target).backward()',
+                setup='''import torch.nn as nn''',
+                globals={'module2': module2, 'matrix_B': matrix_B, 'target': target, 'loss_fn': loss_fn},
+                #num_threads=torch.get_num_threads(),
             )
-            result2 = timer2.blocked_autorange()
+            result2 = timer2.blocked_autorange(min_run_time=60)
 
             # Check output equivalence with module 1
             with torch.no_grad():
@@ -131,6 +119,8 @@ loss2 = nn.MSELoss()(module2(matrix_B), target[:m])''',
             print(f"Module 2 failed at m = {m} with error: {e}")
             module2_success = False
             result2 = None
+        del timer2
+        torch.cuda.empty_cache()
 
         # Store results
         results.append((m, result1, result2, outputs_equivalent))
@@ -142,7 +132,7 @@ loss2 = nn.MSELoss()(module2(matrix_B), target[:m])''',
     return results
 
 # Constants
-k = 64
+k = 32
 D = int(1e6)
 
 # Range of m values (logarithmic steps)

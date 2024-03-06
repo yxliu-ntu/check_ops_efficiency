@@ -5,8 +5,17 @@ import numpy as np
 
 from scipy.sparse import random as sparse_random
 from scipy import sparse
+from utils import sparse_d_mm_2d
 
 # Module definitions (same as before)
+class SparseDenseMatMulCPU(nn.Module):
+    def __init__(self, matrix_A):
+        super(SparseDenseMatMulCPU, self).__init__()
+        self.matrix_A = nn.Parameter(matrix_A)
+
+    def forward(self, matrix_B):
+        return sparse_d_mm_2d.apply(matrix_B, self.matrix_A)
+
 class SparseDenseMatMul(nn.Module):
     def __init__(self, matrix_A):
         super(SparseDenseMatMul, self).__init__()
@@ -56,7 +65,7 @@ def compare_modules(m_values, D, k):
     print("Memory occupied by A: %f GB"%(D*k*32/8./1024/1024/1024))
 
     # Initialize modules
-    module1 = SparseDenseMatMul(matrix_A).to(device)
+    module1 = SparseDenseMatMulCPU(matrix_A).to(device)
     module2 = EmbeddingAggregation(matrix_A).to(device)
 
     # Loss function
@@ -137,7 +146,7 @@ D = int(1e6)
 
 # Range of m values (logarithmic steps)
 start_point = 1
-end_point = 4
+end_point = 3
 m_values = np.logspace(start_point, end_point, num=end_point-start_point+1, base=10).astype(int)
 print(m_values)
 

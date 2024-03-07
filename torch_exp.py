@@ -74,7 +74,7 @@ def compare_modules(m_values, D, k):
     for m in m_values:
         print("\nTiming by m=%d"%m)
         # Generate sparse matrix B
-        matrix_B = generate_sparse_matrix(m, D, k, device)
+        matrix_B = generate_sparse_matrix(m, D, k, device).coalesce()
 
         target = torch.ones(m, k, device=device)  # Target matrix
         output1 = torch.ones(m, k, device=device)  # Target matrix

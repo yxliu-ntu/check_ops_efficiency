@@ -42,9 +42,20 @@ def get_cfuncs(dtype):
         ctypes.c_size_t,
     ]
 
-    return dense_mm, sparse_d_mm
+    sparse_coo_d_mm = lib.sparse_coo_d_mm
+    sparse_coo_d_mm.restype = None
+    sparse_coo_d_mm.argtypes = [
+        ndpointer(dtype_c, flags="C_CONTIGUOUS"),
+        ndpointer(dtype_c, flags="C_CONTIGUOUS"),
+        ndpointer(ctypes.c_size_t, flags="C_CONTIGUOUS"),
+        ndpointer(dtype_c, flags="C_CONTIGUOUS"),
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+    ]
 
-dense_mm, sparse_d_mm = get_cfuncs('float')
+    return dense_mm, sparse_d_mm, sparse_coo_d_mm
+
+dense_mm, sparse_d_mm, sparse_coo_d_mm = get_cfuncs('float')
 
 class sparse_d_mm_2d(torch.autograd.Function):
     @staticmethod
@@ -53,11 +64,20 @@ class sparse_d_mm_2d(torch.autograd.Function):
 
         m, k = X.shape[0], W.shape[1]
         output = np.zeros((m, k), dtype='float32')  # (m, k)
-        X_csr = csr_matrix((X.detach().coalesce().cpu().values(), X.detach().coalesce().cpu().indices()), shape=X.shape)
-        #X_data = X_csr.values().numpy()
-        #X_indices = X_csr.crow_indices().detach().cpu().numpy().astype('int32')
-        #X_indptr = X_csr.col_indices().detach().cpu().numpy().astype('int32')
-        sparse_d_mm(output, X_csr.data, X_csr.indices, X_csr.indptr, W.detach().cpu().numpy(), m, k)
+        #X_csr = csr_matrix((X.detach().coalesce().cpu().values(), X.detach().coalesce().cpu().indices()), shape=X.shape)
+        #sparse_d_mm(output, X_csr.data, X_csr.indices, X_csr.indptr, W.detach().cpu().numpy(), m, k)
+
+        ##X_csr = X.detach().coalesce().cpu().to_sparse_csr()
+        #X_csr = X.cpu().to_sparse_csr()
+        #X_csr_data = X_csr.values().numpy() # (nnz,)
+        #X_csr_indices = X_csr.col_indices().numpy().astype('int32') # (nnz,)
+        #X_csr_indptr = X_csr.crow_indices().numpy().astype('int32')
+        #sparse_d_mm(output, X_csr_data, X_csr_indices, X_csr_indptr, W.detach().cpu().numpy(), m, k)
+
+        X_data = X.cpu().values().numpy() #(nnz,)
+        nnz = X_data.shape[0]
+        X_indices = X.cpu().indices().numpy().flatten().astype(np.uintp) # (nnz,)
+        sparse_coo_d_mm(output, X_data, X_indices, W.detach().cpu().numpy(), nnz, k)
 
         ctx.save_for_backward(X)
         ctx.X_feat_dim = X.shape[1]
@@ -69,10 +89,19 @@ class sparse_d_mm_2d(torch.autograd.Function):
 
         D, k = ctx.X_feat_dim, grad.shape[1]
         grad_W = np.zeros((D, k), dtype='float32')
-        X_csc = csc_matrix((X.detach().coalesce().cpu().values(), X.detach().coalesce().cpu().indices()), shape=X.shape)
-        #Xt_data = X_csc.values().detach().cpu().numpy()
-        #Xt_indices = X_csc.row_indices().detach().cpu().numpy().astype('int32')
-        #Xt_indptr = X_csc.ccol_indices().detach().cpu().numpy().astype('int32')
-        sparse_d_mm(grad_W, X_csc.data, X_csc.indices, X_csc.indptr, grad.detach().cpu().numpy(), D, k)
+        #X_csc = csc_matrix((X.detach().coalesce().cpu().values(), X.detach().coalesce().cpu().indices()), shape=X.shape)
+        #sparse_d_mm(grad_W, X_csc.data, X_csc.indices, X_csc.indptr, grad.detach().cpu().numpy(), D, k)
+
+        ##X_csc = X.detach().coalesce().cpu().to_sparse_csc()
+        #X_csc = X.cpu().to_sparse_csc()
+        #X_csc_data = X_csc.values().numpy() #(nnz,)
+        #X_csc_indices = X_csc.row_indices().numpy().astype('int32') # (nnz,)
+        #X_csc_indptr = X_csc.ccol_indices().numpy().astype('int32')
+        #sparse_d_mm(grad_W, X_csc_data, X_csc_indices, X_csc_indptr, grad.detach().cpu().numpy(), D, k)
+
+        X_data = X.cpu().values().numpy() #(nnz,)
+        nnz = X_data.shape[0]
+        X_indices = X.cpu().indices().numpy()[::-1, :].flatten().astype(np.uintp) # (nnz,)
+        sparse_coo_d_mm(grad_W, X_data, X_indices, grad.detach().cpu().numpy(), nnz, k)
 
         return None, torch.tensor(grad_W, dtype=X.dtype, device=X.device)  # has the same number and order as forward input

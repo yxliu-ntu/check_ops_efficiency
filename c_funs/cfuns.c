@@ -50,3 +50,15 @@ void sparse_d_mm(dtype *C, const dtype *A_data, const int32_t *A_indices, const 
         }
     }
 }
+
+void sparse_coo_d_mm(dtype *C, const dtype *A_data, const size_t *A_indices, const dtype *B, const size_t nnz, const size_t k)
+{
+#pragma omp parallel for schedule(dynamic)
+    for (size_t i = 0; i < nnz; i++)
+    {
+        const size_t x = A_indices[i];
+        const size_t y = A_indices[i + nnz];
+        dtype *cr = C + x*k;
+        axpy(cr, B + y*k, k, A_data[i]);
+    }
+}

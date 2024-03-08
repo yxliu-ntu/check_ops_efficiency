@@ -65,6 +65,7 @@ def compare_modules(m_values, D, k):
     print("Memory occupied by A: %f GB"%(D*k*32/8./1024/1024/1024))
 
     # Initialize modules
+    pivot = SparseDenseMatMul(matrix_A).to(device)
     module1 = SparseDenseMatMulCPU(matrix_A).to(device)
     module2 = EmbeddingAggregation(matrix_A).to(device)
 
@@ -85,6 +86,29 @@ def compare_modules(m_values, D, k):
 
         try:
             # Forward and backward for module 1
+            pvtimer = benchmark.Timer(
+                    #stmt='pivot(matrix_B)',
+                stmt='loss_fn(pivot(matrix_B), target).backward()',
+                setup='''import torch.nn as nn''',
+                globals={'pivot': pivot, 'matrix_B': matrix_B, 'target': target, 'loss_fn': loss_fn},
+                #num_threads=torch.get_num_threads(),
+            )
+            pvresult = pvtimer.blocked_autorange(min_run_time=60)
+
+            # Check output equivalence with module 2
+            with torch.no_grad():
+                pivot_output = pivot(matrix_B)
+
+            pivot_success = True
+        except RuntimeError as e:
+            print(f"Pivot Module failed at m = {m} with error: {e}")
+            pivot_success = False
+            pvresult = None
+        del pvtimer
+        torch.cuda.empty_cache()
+
+        try:
+            # Forward and backward for module 1
             timer1 = benchmark.Timer(
                     #stmt='module1(matrix_B)',
                 stmt='loss_fn(module1(matrix_B), target).backward()',
@@ -97,6 +121,8 @@ def compare_modules(m_values, D, k):
             # Check output equivalence with module 2
             with torch.no_grad():
                 output1 = module1(matrix_B)
+                if pivot_success:
+                    outputs_equivalent1 = torch.allclose(pivot_output, output1)
 
             module1_success = True
         except RuntimeError as e:
@@ -120,8 +146,8 @@ def compare_modules(m_values, D, k):
             # Check output equivalence with module 1
             with torch.no_grad():
                 output2 = module2(matrix_B)
-                if module1_success:
-                    outputs_equivalent = torch.allclose(output1, output2)
+                if pivot_success:
+                    outputs_equivalent2 = torch.allclose(pivot_output, output2)
 
             module2_success = True
         except RuntimeError as e:
@@ -132,10 +158,10 @@ def compare_modules(m_values, D, k):
         torch.cuda.empty_cache()
 
         # Store results
-        results.append((m, result1, result2, outputs_equivalent))
+        results.append((m, pvresult, result1, result2, outputs_equivalent1, outputs_equivalent2))
 
         # Stop experiment if both modules failed
-        if not module1_success and not module2_success:
+        if not pivot_success and not module1_success and not module2_success:
             break
 
     return results
@@ -154,8 +180,13 @@ print(m_values)
 comparison_results = compare_modules(m_values, D, k)
 
 # Print results
-for m, result1, result2, equivalent in comparison_results:
+for m, pvresult, result1, result2, equivalent1, equivalent2 in comparison_results:
     print(f"m = {m}:")
+    if pvresult is not None:
+        print(f"  Pivot Module - Time: {pvresult.mean}")#, Memory: {pvresult.mem_usage}")
+    else:
+        print("  Pivot Module - Failed")
+
     if result1 is not None:
         print(f"  Module 1 - Time: {result1.mean}")#, Memory: {result1.mem_usage}")
     else:
@@ -165,5 +196,7 @@ for m, result1, result2, equivalent in comparison_results:
         print(f"  Module 2 - Time: {result2.mean}")#, Memory: {result2.mem_usage}")
     else:
         print("  Module 2 - Failed")
-    print(f"  Outputs Equivalent: {equivalent}\n")
+
+    print(f"  Outputs Equivalent1: {equivalent1}")
+    print(f"  Outputs Equivalent2: {equivalent2}\n")
 

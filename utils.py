@@ -8,9 +8,9 @@ from numpy.ctypeslib import ndpointer
 from scipy.sparse import isspmatrix, csc_matrix, csr_matrix, vstack as sp_vstack
 
 def get_cfuncs(dtype):
-    if dtype == 'double':
+    if dtype in ['double', 'float64']:
         dtype_c = ctypes.c_double
-    elif dtype == 'float':
+    elif dtype in ['float', 'float32']:
         dtype_c = ctypes.c_float
     else:
         print('dtype not supported!')
@@ -55,7 +55,7 @@ def get_cfuncs(dtype):
 
     return dense_mm, sparse_d_mm, sparse_coo_d_mm
 
-dense_mm, sparse_d_mm, sparse_coo_d_mm = get_cfuncs('float')
+dense_mm, sparse_d_mm, sparse_coo_d_mm = get_cfuncs('float32')
 
 class sparse_d_mm_2d(torch.autograd.Function):
     @staticmethod
@@ -108,8 +108,8 @@ class sparse_d_mm_2d(torch.autograd.Function):
 
 if __name__ == '__main__':
     #np.random.seed(0)
-    #dtype = "float"
-    dtype = "double"
+    dtype = "float32"
+    #dtype = "float64"
     dense_mm, sparse_d_mm, sparse_coo_d_mm = get_cfuncs(dtype)
     from scipy.sparse import random
     rnd_coo = random(100, 200, density=0.1, dtype=dtype)

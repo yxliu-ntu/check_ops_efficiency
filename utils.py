@@ -105,3 +105,41 @@ class sparse_d_mm_2d(torch.autograd.Function):
         sparse_coo_d_mm(grad_W, X_data, X_indices, grad.detach().cpu().numpy(), nnz, k)
 
         return None, torch.tensor(grad_W, dtype=X.dtype, device=X.device)  # has the same number and order as forward input
+
+if __name__ == '__main__':
+    #np.random.seed(0)
+    #dtype = "float"
+    dtype = "double"
+    dense_mm, sparse_d_mm, sparse_coo_d_mm = get_cfuncs(dtype)
+    from scipy.sparse import random
+    rnd_coo = random(100, 200, density=0.1, dtype=dtype)
+    rnd_csr = rnd_coo.tocsr(copy=True)
+    rnd_dns = rnd_csr.todense()
+
+    embed = np.random.rand(200, 10).astype(dtype)
+
+    print(rnd_dns.dot(embed).sum())
+
+    output = np.zeros((100, 10)).astype(dtype)
+    sparse_d_mm(
+            output,
+            rnd_csr.data,
+            rnd_csr.indices,
+            rnd_csr.indptr,
+            embed,
+            100,
+            10,
+            )
+    print(output.sum())
+
+    output = np.zeros((100, 10)).astype(dtype)
+    sparse_coo_d_mm(
+            output,
+            rnd_coo.data,
+            np.vstack(rnd_coo.nonzero()).astype(np.uintp),
+            embed,
+            rnd_coo.nnz,
+            10,
+            )
+    print(output.sum())
+

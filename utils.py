@@ -57,6 +57,30 @@ def get_cfuncs(dtype):
 
 dense_mm, sparse_d_mm, sparse_coo_d_mm = get_cfuncs('float32')
 
+class csr_sparse_d_mm_2d(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, X_csr, W):
+        ctx.set_materialize_grads(False)
+
+        assert isinstance(X_csr, csr_matrix)
+        m, k = X_csr.shape[0], W.shape[1]
+        output = np.zeros((m, k), dtype='float32')  # (m, k)
+        sparse_d_mm(output, X_csr.data, X_csr.indices, X_csr.indptr, W.detach().cpu().numpy(), m, k)
+
+        ctx.X_csr = X_csr
+
+        return torch.tensor(output, dtype=W.dtype, device=W.device)
+
+    @staticmethod
+    def backward(ctx, grad):  # the number of grad ouput must be the same as the number of forward ouput
+        X_csc = ctx.X_csr.tocsc(copy=True)
+
+        D, k = X_csc.shape[1], grad.shape[1]
+        grad_W = np.zeros((D, k), dtype='float32')
+        sparse_d_mm(grad_W, X_csc.data, X_csc.indices, X_csc.indptr, grad.detach().cpu().numpy(), D, k)
+
+        return None, torch.tensor(grad_W, dtype=grad.dtype, device=grad.device)  # has the same number and order as forward input
+
 class sparse_d_mm_2d(torch.autograd.Function):
     @staticmethod
     def forward(ctx, X, W):

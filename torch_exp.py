@@ -5,7 +5,7 @@ import numpy as np
 
 from scipy.sparse import random as sparse_random
 from scipy import sparse
-from utils import sparse_d_mm_2d
+from utils import csr_sparse_d_mm_2d, sparse_d_mm_2d
 
 # Module definitions (same as before)
 class SparseDenseMatMulCPU(nn.Module):
@@ -14,7 +14,8 @@ class SparseDenseMatMulCPU(nn.Module):
         self.matrix_A = nn.Parameter(matrix_A)
 
     def forward(self, matrix_B):
-        return sparse_d_mm_2d.apply(matrix_B, self.matrix_A)
+        #return sparse_d_mm_2d.apply(matrix_B, self.matrix_A)
+        return csr_sparse_d_mm_2d.apply(matrix_B, self.matrix_A)
 
 class SparseDenseMatMul(nn.Module):
     def __init__(self, matrix_A):
@@ -50,7 +51,7 @@ def generate_sparse_matrix(m, D, k, device, sparsity=0.99):
     values = torch.FloatTensor(sparse_matrix_scipy.data)
     indices = torch.LongTensor(np.vstack((sparse_matrix_scipy.row, sparse_matrix_scipy.col)))
 
-    return torch.sparse_coo_tensor(indices, values, torch.Size(sparse_matrix_scipy.shape), device=device)
+    return sparse_matrix_scipy.tocsr(True), torch.sparse_coo_tensor(indices, values, torch.Size(sparse_matrix_scipy.shape), device=device)
 
 # Function to perform the experiment with exception handling
 def compare_modules(m_values, D, k):
@@ -75,7 +76,8 @@ def compare_modules(m_values, D, k):
     for m in m_values:
         print("\nTiming by m=%d"%m)
         # Generate sparse matrix B
-        matrix_B = generate_sparse_matrix(m, D, k, device).coalesce()
+        csr_matrix_B, matrix_B = generate_sparse_matrix(m, D, k, device)
+        matrix_B = matrix_B.coalesce()
 
         target = torch.ones(m, k, device=device)  # Target matrix
         output1 = torch.ones(m, k, device=device)  # Target matrix
@@ -85,17 +87,28 @@ def compare_modules(m_values, D, k):
         outputs_equivalent = False
 
         try:
-            # Forward and backward for module 1
+            # Define an optimizer for pivot's parameters
+            optimizer = torch.optim.SGD(pivot.parameters(), lr=0.01)
+
+            # Forward and backward for pivot
             pvtimer = benchmark.Timer(
                     #stmt='pivot(matrix_B)',
-                stmt='loss_fn(pivot(matrix_B), target).backward()',
-                setup='''import torch.nn as nn''',
-                globals={'pivot': pivot, 'matrix_B': matrix_B, 'target': target, 'loss_fn': loss_fn},
+                stmt='''
+optimizer.zero_grad()  # Zero the gradients before backward pass
+loss = loss_fn(pivot(matrix_B), target)  # Compute the loss
+loss.backward()  # Compute the gradients
+optimizer.step()  # Update the parameters
+                ''',
+                setup='''
+import torch
+import torch.optim as optim
+import torch.nn as nn
+                ''',
+                globals={'pivot': pivot, 'matrix_B': matrix_B, 'target': target, 'loss_fn': loss_fn, 'optimizer': optimizer},
                 #num_threads=torch.get_num_threads(),
             )
             pvresult = pvtimer.blocked_autorange(min_run_time=60)
 
-            # Check output equivalence with module 2
             with torch.no_grad():
                 pivot_output = pivot(matrix_B)
 
@@ -108,19 +121,31 @@ def compare_modules(m_values, D, k):
         torch.cuda.empty_cache()
 
         try:
+            # Define an optimizer for module1's parameters
+            optimizer1 = torch.optim.SGD(module1.parameters(), lr=0.01)
+
             # Forward and backward for module 1
             timer1 = benchmark.Timer(
                     #stmt='module1(matrix_B)',
-                stmt='loss_fn(module1(matrix_B), target).backward()',
-                setup='''import torch.nn as nn''',
-                globals={'module1': module1, 'matrix_B': matrix_B, 'target': target, 'loss_fn': loss_fn},
+                stmt='''
+optimizer.zero_grad()  # Zero the gradients before backward pass
+loss = loss_fn(module1(matrix_B), target)  # Compute the loss
+loss.backward()  # Compute the gradients
+optimizer.step()  # Update the parameters
+                ''',
+                setup='''
+import torch
+import torch.optim as optim
+import torch.nn as nn
+                ''',
+                globals={'module1': module1, 'matrix_B': csr_matrix_B, 'target': target, 'loss_fn': loss_fn, 'optimizer': optimizer1},
                 #num_threads=torch.get_num_threads(),
             )
             result1 = timer1.blocked_autorange(min_run_time=60)
 
             # Check output equivalence with module 2
             with torch.no_grad():
-                output1 = module1(matrix_B)
+                output1 = module1(csr_matrix_B)
                 if pivot_success:
                     outputs_equivalent1 = torch.allclose(pivot_output, output1)
 
@@ -133,12 +158,24 @@ def compare_modules(m_values, D, k):
         torch.cuda.empty_cache()
 
         try:
+            # Define an optimizer for module2's parameters
+            optimizer2 = torch.optim.SGD(module2.parameters(), lr=0.01)
+
             # Forward and backward for module 2
             timer2 = benchmark.Timer(
                     #stmt='module2(matrix_B)',
-                stmt='loss_fn(module2(matrix_B), target).backward()',
-                setup='''import torch.nn as nn''',
-                globals={'module2': module2, 'matrix_B': matrix_B, 'target': target, 'loss_fn': loss_fn},
+                stmt='''
+optimizer.zero_grad()  # Zero the gradients before backward pass
+loss = loss_fn(module2(matrix_B), target)  # Compute the loss
+loss.backward()  # Compute the gradients
+optimizer.step()  # Update the parameters
+                ''',
+                setup='''
+import torch
+import torch.optim as optim
+import torch.nn as nn
+                ''',
+                globals={'module2': module2, 'matrix_B': matrix_B, 'target': target, 'loss_fn': loss_fn, 'optimizer': optimizer2},
                 #num_threads=torch.get_num_threads(),
             )
             result2 = timer2.blocked_autorange(min_run_time=60)

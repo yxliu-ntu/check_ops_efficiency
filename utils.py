@@ -81,6 +81,30 @@ class csr_sparse_d_mm_2d(torch.autograd.Function):
 
         return None, torch.tensor(grad_W, dtype=grad.dtype, device=grad.device)  # has the same number and order as forward input
 
+class csr_sparse_d_mm_2d_gpu(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, X_csr, W):
+        ctx.set_materialize_grads(False)
+
+        assert isinstance(X_csr, csr_matrix)
+        #X = torch.sparse_coo_tensor(np.array(X_csr.nonzero()), X_csr.data, size=X_csr.shape, dtype=W.dtype, device=W.device)
+        #output = torch.sparse.mm(X, W)
+        X = torch.sparse_csr_tensor(X_csr.indptr, X_csr.indices, X_csr.data, size=X_csr.shape, dtype=W.dtype, device=W.device)
+        output = torch.matmul(X, W)
+
+        ctx.save_for_backward(X)
+
+        return output
+
+    @staticmethod
+    def backward(ctx, grad):  # the number of grad ouput must be the same as the number of forward ouput
+        XT = ctx.saved_tensors[0].t()
+
+        #grad_W = torch.sparse.mm(XT, grad)
+        grad_W = torch.matmul(XT, grad)
+
+        return None, grad_W  # has the same number and order as forward input
+
 class sparse_d_mm_2d(torch.autograd.Function):
     @staticmethod
     def forward(ctx, X, W):

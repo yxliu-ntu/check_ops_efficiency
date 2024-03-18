@@ -5,7 +5,7 @@ import numpy as np
 
 from scipy.sparse import random as sparse_random
 from scipy import sparse
-from utils import csr_sparse_d_mm_2d, sparse_d_mm_2d
+from utils import csr_sparse_d_mm_2d_gpu, csr_sparse_d_mm_2d, sparse_d_mm_2d
 
 # Module definitions (same as before)
 class SparseDenseMatMulCPU(nn.Module):
@@ -15,7 +15,11 @@ class SparseDenseMatMulCPU(nn.Module):
 
     def forward(self, matrix_B):
         #return sparse_d_mm_2d.apply(matrix_B, self.matrix_A)
-        return csr_sparse_d_mm_2d.apply(matrix_B, self.matrix_A)
+        if torch.cuda.is_available():
+            return csr_sparse_d_mm_2d_gpu.apply(matrix_B, self.matrix_A)
+        else:
+            return csr_sparse_d_mm_2d.apply(matrix_B, self.matrix_A)
+
 
 class SparseDenseMatMul(nn.Module):
     def __init__(self, matrix_A):
